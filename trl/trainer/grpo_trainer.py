@@ -986,6 +986,7 @@ class GRPOTrainer(Trainer):
         image_grid_thw=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        spatial_shapes=None,
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
@@ -1005,6 +1006,9 @@ class GRPOTrainer(Trainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
+        # For LiquidAI VLM
+        if spatial_shapes is not None:
+            model_inputs["spatial_shapes"] = spatial_shapes
 
         # Only add logits_to_keep if the model supports it
         if "logits_to_keep" in self.model_kwarg_keys:
@@ -1062,6 +1066,7 @@ class GRPOTrainer(Trainer):
         image_grid_thw=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        spatial_shapes=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1085,6 +1090,8 @@ class GRPOTrainer(Trainer):
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+            if spatial_shapes is not None:
+                model_inputs["spatial_shapes"] = spatial_shapes[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1627,6 +1634,7 @@ class GRPOTrainer(Trainer):
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
+                    spatial_shapes=prompt_inputs.get("spatial_shapes"),
                 )
             else:
                 old_per_token_logps = None
@@ -1644,6 +1652,7 @@ class GRPOTrainer(Trainer):
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
+                        spatial_shapes=prompt_inputs.get("spatial_shapes"),
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1657,6 +1666,7 @@ class GRPOTrainer(Trainer):
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
+                            spatial_shapes=prompt_inputs.get("spatial_shapes"),
                         )
             else:
                 ref_per_token_logps = None
@@ -1760,6 +1770,8 @@ class GRPOTrainer(Trainer):
             output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
+        if "spatial_shapes" in prompt_inputs:
+            output["spatial_shapes"] = prompt_inputs["spatial_shapes"]
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1780,6 +1792,7 @@ class GRPOTrainer(Trainer):
             inputs.get("image_grid_thw"),
             inputs.get("pixel_attention_mask"),
             inputs.get("image_sizes"),
+            inputs.get("spatial_shapes"),
         )
 
         # compute loss and metrics using liger grpo loss
@@ -1834,6 +1847,7 @@ class GRPOTrainer(Trainer):
             image_grid_thw=inputs.get("image_grid_thw"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
+            spatial_shapes=inputs.get("spatial_shapes"),
         )
 
         if self.top_entropy_quantile < 1.0:
