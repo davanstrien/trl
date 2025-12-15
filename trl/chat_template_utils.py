@@ -234,21 +234,23 @@ qwen3_chat_template = r"""{%- if tools %}
 {%- endif %}"""
 
 
-def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
+def add_response_schema(processing_class):
     r"""
-    Adds the appropriate response schema to the given tokenizer based on its chat template.
+    Adds the appropriate response schema to the given tokenizer or processor based on its chat template.
 
     At the time of initial implementation, most tokenizers do not have built-in support for response schemas. While
     waiting for broader adoption, we provide this utility function to manually set the response schema for known chat
     templates.
 
+    This function supports both tokenizers and processors (e.g., VLM processors like Qwen3-VL). For processors,
+    the response schema is added to the underlying tokenizer.
+
     Args:
-        tokenizer (`PreTrainedTokenizer`):
-            Tokenizer to which the response schema will be added.
+        processing_class (`PreTrainedTokenizer` or processor):
+            Tokenizer or processor to which the response schema will be added.
 
     Returns:
-        `PreTrainedTokenizer`:
-            Tokenizer with the added response schema.
+        The input processing_class with the response schema added (to its tokenizer if it's a processor).
 
     Examples:
 
@@ -261,11 +263,32 @@ def add_response_schema(tokenizer: PreTrainedTokenizer) -> PreTrainedTokenizer:
     >>> assistant_text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
     >>> tokenizer.parse_response(assistant_text)
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
+
+    >>> # Also works with VLM processors
+    >>> from transformers import AutoProcessor
+    >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-2B-Instruct")
+    >>> processor = add_response_schema(processor)
+    >>> processor.tokenizer.response_schema is not None
+    True
     ```
     """
+    # Handle processors by extracting their tokenizer
+    if hasattr(processing_class, "tokenizer") and not isinstance(processing_class, PreTrainedTokenizer):
+        tokenizer = processing_class.tokenizer
+    else:
+        tokenizer = processing_class
+
+    # Check for Qwen3-style chat template (works for both Qwen3 and Qwen3-VL)
+    # VLM processors may have slightly different templates, so we check for the tool_call pattern
+    # rather than doing an exact match
     if tokenizer.chat_template == qwen3_chat_template:
         tokenizer.response_schema = qwen3_schema
-        return tokenizer
+        return processing_class
+    elif tokenizer.chat_template and "<tool_call>" in tokenizer.chat_template:
+        # Flexible match for Qwen3-style templates (including VLM variants)
+        tokenizer.response_schema = qwen3_schema
+        return processing_class
+
     raise ValueError(
         "Unrecognized chat template, failed to add response schema. Please manually set the response schema on the "
         "tokenizer or processor. See the Transformers "

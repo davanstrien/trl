@@ -419,8 +419,11 @@ class GRPOTrainer(BaseTrainer):
         # While waiting for broader adoption, we provide this utility function to manually set the response schema for
         # known chat templates.
         # We need `getattr`` until the base class sets a default None value for response_schema
-        if tools and not getattr(processing_class, "response_schema", None):
-            processing_class = add_response_schema(processing_class)
+        # For processors (e.g., VLM processors), check the tokenizer's response_schema, not the processor's
+        if tools:
+            tokenizer = getattr(processing_class, "tokenizer", processing_class)
+            if not getattr(tokenizer, "response_schema", None):
+                processing_class = add_response_schema(processing_class)
         # In multi-turn training, the chat template *must* be prefix-preserving. If the tokenizer's original template
         # isn't, we replace it at initialization with a training-safe, prefix-preserving template.
         if tools:
@@ -1661,13 +1664,15 @@ class GRPOTrainer(BaseTrainer):
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
         if is_conversational({"prompt": prompts[0]}):
+            # Get tokenizer for parsing (works with both tokenizers and processors like VLM processors)
+            tokenizer_for_parsing = getattr(self.processing_class, "tokenizer", self.processing_class)
             if (
                 Version(transformers.__version__) >= Version("5.0.0.dev0")  # parse_response added in v5
-                and isinstance(self.processing_class, PreTrainedTokenizerBase)  # doesn't work with processors
-                and hasattr(self.processing_class, "response_schema")  # attribute not set by default for now
-                and self.processing_class.response_schema is not None  # only works if the tokenizer has a schema
+                and isinstance(tokenizer_for_parsing, PreTrainedTokenizerBase)  # works with tokenizers extracted from processors
+                and hasattr(tokenizer_for_parsing, "response_schema")  # attribute not set by default for now
+                and tokenizer_for_parsing.response_schema is not None  # only works if the tokenizer has a schema
             ):
-                completions = [[parse_response(self.processing_class, ids)] for ids in completion_ids]
+                completions = [[parse_response(tokenizer_for_parsing, ids)] for ids in completion_ids]
             else:
                 contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
                 completions = [[{"role": "assistant", "content": content}] for content in contents]
