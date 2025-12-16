@@ -1514,6 +1514,27 @@ class GRPOTrainer(BaseTrainer):
 
         return prompt_ids, completion_ids, logprobs, extra_fields
 
+    def _ensure_structured_content(self, message):
+        """Ensure message content is in structured format for VLM processor compatibility.
+
+        VLM processors expect message content to be a list of content blocks like:
+            [{"type": "text", "text": "..."}]
+        rather than a plain string. This method converts string content to the structured format.
+        """
+        # Check if we're using a VLM processor (has tokenizer attribute but isn't a tokenizer itself)
+        is_vlm_processor = (
+            hasattr(self.processing_class, "tokenizer")
+            and not isinstance(self.processing_class, PreTrainedTokenizerBase)
+        )
+        if not is_vlm_processor:
+            return message
+
+        # Convert string content to structured format
+        message = copy.copy(message)  # shallow copy to avoid modifying original
+        if isinstance(message.get("content"), str):
+            message["content"] = [{"type": "text", "text": message["content"]}]
+        return message
+
     def _tool_call_loop(self, prompts, prompt_ids, completion_ids, completions, logprobs):
         # Tool execution loop: execute tools, then regenerate completions with tool results appended to the prompt
         tool_calls = [completion[0].get("tool_calls") for completion in completions]
@@ -1532,7 +1553,9 @@ class GRPOTrainer(BaseTrainer):
                 tool_call_list = tool_calls[idx]
                 prompt_completion_tool = prompt_completion_tools[idx]
                 # Append the last assistant message (which triggered tool_calls) to the prompt
-                prompt_completion_tool.append(completions[idx_with_tool][-1])
+                # Use structured content format for VLM processor compatibility
+                assistant_message = self._ensure_structured_content(completions[idx_with_tool][-1])
+                prompt_completion_tool.append(assistant_message)
                 for tool_call in tool_call_list:
                     tool_call_count += 1
                     if tool_call["type"] == "function":
@@ -1548,6 +1571,8 @@ class GRPOTrainer(BaseTrainer):
                         name = tool_call.get("name", "unknown")
                         result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
                     tool_message = {"role": "tool", "name": name, "content": str(result)}
+                    # Convert to structured format for VLM processor compatibility
+                    tool_message = self._ensure_structured_content(tool_message)
                     prompt_completion_tool.append(tool_message)
                     completions[idx_with_tool].append(tool_message)
 
@@ -1636,8 +1661,10 @@ class GRPOTrainer(BaseTrainer):
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
             # Decode post-tool completions
+            # Use tokenizer for parsing (works with both tokenizers and VLM processors)
+            tokenizer_for_parsing = getattr(self.processing_class, "tokenizer", self.processing_class)
             post_tool_completions = [
-                parse_response(self.processing_class, ids) if ids else {} for ids in post_tool_ids
+                parse_response(tokenizer_for_parsing, ids) if ids else {} for ids in post_tool_ids
             ]
 
             # Add post-tool completions to the existing completions
