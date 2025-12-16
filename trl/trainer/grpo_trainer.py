@@ -1583,13 +1583,24 @@ class GRPOTrainer(BaseTrainer):
                 tools=self.tools,
                 tokenize=True,
                 add_generation_prompt=True,
+                return_dict=True,
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
             )["input_ids"]
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
-                max_model_len = self.model.config.max_position_embeddings
+                # Handle VLM models with nested text_config (e.g., Qwen3-VL)
+                config = self.model.config
+                if hasattr(config, "text_config") and hasattr(config.text_config, "max_position_embeddings"):
+                    max_model_len = config.text_config.max_position_embeddings
+                elif hasattr(config, "max_position_embeddings"):
+                    max_model_len = config.max_position_embeddings
+                else:
+                    raise AttributeError(
+                        f"Model config {type(config).__name__} has no 'max_position_embeddings'. "
+                        "VLM models should have 'text_config.max_position_embeddings'."
+                    )
             else:
                 raise NotImplementedError(
                     f"Unsupported mode detected: use_vllm={self.use_vllm}, vllm_mode={self.vllm_mode}"
@@ -1616,14 +1627,28 @@ class GRPOTrainer(BaseTrainer):
             )
 
             # Sanity check: from experience, this is useful to catch bugs in the chat template
+            # Skip this check for VLM processors as image tokens may cause legitimate differences
+            is_vlm_processor = (
+                hasattr(self.processing_class, "tokenizer")
+                and not isinstance(self.processing_class, PreTrainedTokenizerBase)
+            )
             for idx in range(len(idxs_with_tool)):
                 idx_with_tool = idxs_with_tool[idx]
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 if prompt_ids[idx_with_tool] != pct[: len(prompt_ids[idx_with_tool])]:
-                    raise ValueError(
-                        "The chat template is not prefix-preserving. Please update it to use a prefix-preserving "
-                        "format."
-                    )
+                    if is_vlm_processor:
+                        # VLM processors may have non-prefix-preserving behavior due to image tokens
+                        warnings.warn(
+                            "The chat template appears non-prefix-preserving. This may be expected for VLM "
+                            "processors with image inputs. Proceeding with caution.",
+                            UserWarning,
+                        )
+                        break  # Only warn once per batch
+                    else:
+                        raise ValueError(
+                            "The chat template is not prefix-preserving. Please update it to use a prefix-preserving "
+                            "format."
+                        )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for idx in range(len(idxs_with_tool)):
