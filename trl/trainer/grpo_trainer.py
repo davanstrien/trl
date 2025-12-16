@@ -1578,15 +1578,36 @@ class GRPOTrainer(BaseTrainer):
 
             # Tokenize and filter samples whose length exceeds max allowed length. This is important, because both
             # vLLM and transformers will error out if the input is longer than the model's max length.
-            pct_ids = self.processing_class.apply_chat_template(
-                prompt_completion_tools,
-                tools=self.tools,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=True,
-                chat_template=self.chat_template,
-                **self.chat_template_kwargs,
-            )["input_ids"]
+            # Check if we're using a VLM processor (has tokenizer attribute but isn't a tokenizer itself)
+            is_vlm_processor = (
+                hasattr(self.processing_class, "tokenizer")
+                and not isinstance(self.processing_class, PreTrainedTokenizerBase)
+            )
+            if is_vlm_processor:
+                # VLM processors may fail with batched prompts containing images due to image index tracking.
+                # Process prompts one at a time to avoid the batching issue.
+                pct_ids = []
+                for pct in prompt_completion_tools:
+                    single_ids = self.processing_class.apply_chat_template(
+                        [pct],
+                        tools=self.tools,
+                        tokenize=True,
+                        add_generation_prompt=True,
+                        return_dict=True,
+                        chat_template=self.chat_template,
+                        **self.chat_template_kwargs,
+                    )["input_ids"]
+                    pct_ids.append(single_ids[0] if isinstance(single_ids[0], list) else single_ids[0].tolist())
+            else:
+                pct_ids = self.processing_class.apply_chat_template(
+                    prompt_completion_tools,
+                    tools=self.tools,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_dict=True,
+                    chat_template=self.chat_template,
+                    **self.chat_template_kwargs,
+                )["input_ids"]
             if self.use_vllm and self.vllm_mode == "colocate":
                 max_model_len = self.llm.llm_engine.model_config.max_model_len
             elif not self.use_vllm:
