@@ -342,7 +342,7 @@ class DistillationConfig(_BaseConfig):
     )
 
     # Chat template
-    chat_template_kwargs: dict[str, Any] | None = field(
+    chat_template_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function. "
