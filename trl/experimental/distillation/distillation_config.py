@@ -145,7 +145,7 @@ class DistillationConfig(_BaseConfig):
             Number of completions to print. If `None`, all completions are logged.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_model_init_kwargs", "chat_template_kwargs"]
 
     # Model
     model_init_kwargs: dict[str, Any] | str | None = field(
@@ -339,6 +339,15 @@ class DistillationConfig(_BaseConfig):
     vllm_enable_sleep_mode: bool = field(
         default=False,
         metadata={"help": "Enable vLLM sleep mode to offload student weights during the optimizer step."},
+    )
+
+    # Chat template
+    chat_template_kwargs: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the `apply_chat_template` function. "
+            "For example, passing `{\"enable_thinking\": false}` for Qwen3 models to disable thinking tokens."
+        },
     )
 
     # W&B

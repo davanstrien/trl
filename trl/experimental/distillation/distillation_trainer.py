@@ -220,12 +220,14 @@ class _DistillationCollator:
         max_prompt_length: int,
         messages_key: str = "messages",
         ignore_index: int = -100,
+        chat_template_kwargs: dict | None = None,
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.max_prompt_length = max_prompt_length
         self.messages_key = messages_key
         self.ignore_index = ignore_index
+        self.chat_template_kwargs = chat_template_kwargs or {}
 
         if tokenizer.pad_token_id is None:
             raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
@@ -244,7 +246,7 @@ class _DistillationCollator:
 
             # Tokenize prompt with its own budget using the tokenizer's truncation side
             formatted_prompt = self.tokenizer.apply_chat_template(
-                prompt_messages, tokenize=False, add_generation_prompt=True
+                prompt_messages, tokenize=False, add_generation_prompt=True, **self.chat_template_kwargs
             )
             prompt_ids = self.tokenizer(
                 formatted_prompt,
@@ -257,7 +259,7 @@ class _DistillationCollator:
             if has_completion:
                 # Tokenize the full message (prompt + completion) without truncation first
                 formatted_full = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
+                    messages, tokenize=False, add_generation_prompt=False, **self.chat_template_kwargs
                 )
                 full_ids = self.tokenizer(formatted_full, truncation=False, padding=False, add_special_tokens=False)[
                     "input_ids"
@@ -438,6 +440,7 @@ class DistillationTrainer(_BaseTrainer):
                 tokenizer=processing_class,
                 max_length=args.max_length,
                 max_prompt_length=args.max_prompt_length,
+                chat_template_kwargs=args.chat_template_kwargs,
             )
 
         # ── Liger fused JSD loss ──
