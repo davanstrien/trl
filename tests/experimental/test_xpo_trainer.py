@@ -62,6 +62,34 @@ class TestXPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    def test_xpo_trainer_training_with_callable_reward(self):
+        training_args = XPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, prompts=None, completion_ids=None, **kwargs):
+            return [float(len(set(completion))) for completion in completions]
+
+        trainer = XPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=reward_func,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert "train_loss" in trainer.state.log_history[-1]
+
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
         # Streaming datasets are not yet supported in XPO

@@ -36,6 +36,7 @@ from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
+from ..online_dpo.online_dpo_trainer import RewardFunc
 from ..utils import empty_cache, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
@@ -57,9 +58,11 @@ class XPOTrainer(OnlineDPOTrainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        reward_funcs ([`~transformers.PreTrainedModel`]):
-            The reward model to score completions with, preferably an
-            [`~transformers.AutoModelForSequenceClassification`].
+        reward_funcs (`RewardFunc`):
+            The reward function to score completions with. Either a reward model (preferably an
+            [`~transformers.AutoModelForSequenceClassification`]) or a custom callable that receives `prompts`,
+            `completions` and `completion_ids` keyword arguments and returns a list of floats, as in
+            [`experimental.online_dpo.OnlineDPOTrainer`]. XPOTrainer supports exactly one reward function.
         args ([`experimental.xpo.XPOConfig`]):
             The XPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
@@ -114,7 +117,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self,
         model: PreTrainedModel | nn.Module = None,
         ref_model: PreTrainedModel | nn.Module = None,
-        reward_funcs: nn.Module | None = None,
+        reward_funcs: RewardFunc | None = None,
         args: XPOConfig | None = None,
         data_collator: Callable | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -173,9 +176,11 @@ class XPOTrainer(OnlineDPOTrainer):
             "alpha": [],
             "beta": [],
         }
+        # Keep `self.reward_funcs` as the list the parent class built: the
+        # callable-reward path delegates to the parent's
+        # `_calculate_rewards_from_functions`, which iterates it.
         if len(self.reward_funcs) != 1:
             raise ValueError("XPOTrainer only supports one reward function/model.")
-        self.reward_funcs = self.reward_funcs[0]
 
     @property
     def alpha(self):
@@ -253,13 +258,18 @@ class XPOTrainer(OnlineDPOTrainer):
         return model_data, ref_data
 
     def _compute_rewards(self, model_data, ref_data, context_length):
-        with torch.no_grad():
-            _, model_scores, _ = get_reward(
-                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
-            )
-            _, ref_scores, _ = get_reward(
-                self.reward_funcs, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
-            )
+        reward_func = self.reward_funcs[0]
+        if isinstance(reward_func, nn.Module):  # Model-based reward function
+            with torch.no_grad():
+                _, model_scores, _ = get_reward(
+                    reward_func, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+                )
+                _, ref_scores, _ = get_reward(
+                    reward_func, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
+                )
+        else:  # Custom callable reward function: reuse the parent's reward plumbing
+            model_scores = self._callable_reward_scores(model_data, context_length)
+            ref_scores = self._callable_reward_scores(ref_data, context_length)
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
@@ -269,6 +279,18 @@ class XPOTrainer(OnlineDPOTrainer):
             ref_scores[~ref_contain_eos] -= self.args.missing_eos_penalty
 
         return model_scores, ref_scores
+
+    def _callable_reward_scores(self, data, context_length):
+        """Score completions with a custom callable reward function, following the
+        same conventions as [`OnlineDPOTrainer`]'s `_calculate_rewards_from_functions`:
+        the callable receives `prompts`, decoded `completions`, and raw
+        `completion_ids` lists."""
+        completion_ids = data["input_ids"][:, context_length:]
+        completion_ids_list = [completion_ids[i].tolist() for i in range(completion_ids.shape[0])]
+        completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        return self._calculate_rewards_from_functions(
+            prompts=list(data["raw"]), completions=completions, completion_ids_list=completion_ids_list
+        )
 
     def _compute_logprobs(self, model, model_data, ref_data, context_length):
         def compute_logprobs_for_data(m, data):
